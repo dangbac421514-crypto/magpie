@@ -6796,7 +6796,7 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 		}
 		run.ended(req, said, stop, ok)
 	})
-	if req.interactive && strings.Contains(msg, thirdPartyWords) {
+	if req.interactive && thirdPartyText(msg) {
 		s.subscription.refusedTUI(req)
 	}
 	if code == redoAsPrint {
@@ -6833,15 +6833,24 @@ func bridgeFailed(name, msg string, status int) (int, string) {
 	return 502, msg
 }
 
-// thirdPartyWords is how Anthropic refuses a Claude subscription's turn
-// it counts as a third-party app's: "API Error: 400 Third-party apps now
-// draw from your extra usage, not your plan limits. Add more at
-// claude.ai/settings/usage and keep going." (#4503, isjiajia01 and
-// sounfury). isjiajia01's controlled tests had it of Claude Code's
-// interactive mode (the cli entrypoint) told a client agent's own system
-// prompt (Pi's, judged as a whole, no phrase of it alone), where claude -p
-// (sdk-cli) was served the same prompt.
-const thirdPartyWords = "Third-party apps now draw from your extra usage"
+// thirdPartyWords and thirdPartyTeamWords are how Anthropic refuses a Claude
+// subscription's turn it counts as a third-party app's: "API Error: 400
+// Third-party apps now draw from your extra usage, not your plan limits. Add
+// more at claude.ai/settings/usage and keep going." on a Pro or Max account
+// (#4503, isjiajia01 and sounfury), or "API Error: 400 Third-party apps now
+// draw from extra usage, not plan limits. Ask your workspace admin to add more
+// and keep going." on a Team or Enterprise workspace. isjiajia01's controlled
+// tests had it of Claude Code's interactive mode (the cli entrypoint) told a
+// client agent's own system prompt (Pi's, judged as a whole, no phrase of it
+// alone), where claude -p (sdk-cli) was served the same prompt.
+const (
+	thirdPartyWords     = "Third-party apps now draw from your extra usage"
+	thirdPartyTeamWords = "Third-party apps now draw from extra usage"
+)
+
+func thirdPartyText(msg string) bool {
+	return strings.Contains(msg, thirdPartyWords) || strings.Contains(msg, thirdPartyTeamWords)
+}
 
 // thirdPartyRefused is msg, the words a Claude Code run's failure is
 // answered with, with what happened and what to do said after it when
@@ -6873,7 +6882,7 @@ func thirdPartyRefused(name string, req *Request, code int, msg string) string {
 // thirdPartySaid is whether a Claude Code run's failure is Anthropic's
 // refusal of its turn as a third-party app's.
 func thirdPartySaid(name string, code int, msg string) bool {
-	return name == "Claude Code" && code == http.StatusBadRequest && strings.Contains(msg, thirdPartyWords)
+	return name == "Claude Code" && code == http.StatusBadRequest && thirdPartyText(msg)
 }
 
 // thirdPartyCode is claudePrint's code for a run that is claude -p

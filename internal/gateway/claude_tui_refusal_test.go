@@ -37,11 +37,20 @@ func TestClaudeTUIRefusalIsNoAccountsFault(t *testing.T) {
 // and sounfury reported (#4503).
 const tuiThirdPartyRefusal = `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 400 Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.","api_error_status":400}`
 
+// tuiThirdPartyTeamRefusal is the same 400 on a Team or Enterprise workspace,
+// which says "from extra usage, not plan limits. Ask your workspace admin to
+// add more and keep going." without "your".
+const tuiThirdPartyTeamRefusal = `{"type":"result","subtype":"error_during_execution","is_error":true,"result":"API Error: 400 Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going.","api_error_status":400}`
+
 // tuiThirdPartyHarness is tuiHelperHarness whose interactive Claude Code
 // answers every turn with that refusal, after hold (a shell command);
 // as claude -p it answers "ok", or runs print first when it is given.
 // (ggbdpq's harness, #4503.)
 func tuiThirdPartyHarness(t *testing.T, hold, print string) (*resumeHarness, string) {
+	return tuiThirdPartyHarnessWith(t, tuiThirdPartyRefusal, hold, print)
+}
+
+func tuiThirdPartyHarnessWith(t *testing.T, refusal, hold, print string) (*resumeHarness, string) {
 	t.Helper()
 	start := `if [ -n "$MG_TEST_TUI" ]; then
   echo '{"type":"system","subtype":"init","session_id":"'$sid'"}'
@@ -52,7 +61,7 @@ func tuiThirdPartyHarness(t *testing.T, hold, print string) (*resumeHarness, str
       continue ;;
     esac
     ` + hold + `
-    echo '` + tuiThirdPartyRefusal + `'
+    echo '` + refusal + `'
     exit 1
   done
   exit 0
@@ -290,5 +299,37 @@ func TestClaudeThirdPartyRefusalOfPrint(t *testing.T) {
 	msg = thirdPartyRefused("Claude Code", &Request{Model: "m", interactive: true}, 400, "API Error: 400 Third-party apps now draw from your extra usage, not your plan limits.")
 	if !strings.Contains(msg, "next turns as claude -p") || strings.Contains(msg, "Settings") {
 		t.Fatal(msg)
+	}
+	msg = thirdPartyRefused("Claude Code", &Request{Model: "m", interactive: true}, 400, "API Error: 400 Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going.")
+	if !strings.Contains(msg, "next turns as claude -p") || strings.Contains(msg, "Settings") {
+		t.Fatal(msg)
+	}
+}
+
+// A Team or Enterprise workspace's refusal ("Third-party apps now draw from
+// extra usage, not plan limits. Ask your workspace admin to add more and keep
+// going.", without "your") is redone once as claude -p and remembers the
+// agent's prompt the same way as a Pro or Max account's.
+func TestClaudeTUITeamThirdPartyRefusalRedoneAsPrint(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "whole", true: "stream"}[stream], func(t *testing.T) {
+			h, started := tuiThirdPartyHarnessWith(t, tuiThirdPartyTeamRefusal, "", "")
+			code, msg, body, u := askThirdParty(t, h, piSystem(t, "/Users/raven/cindy"), stream)
+			if code != 200 || !strings.Contains(body, "ok") {
+				t.Fatalf("%d %.300s %.400s", code, msg, body)
+			}
+			if strings.Contains(body, "Third-party apps now draw from") || u.ErrType != "" {
+				t.Fatalf("the client, or its usage row, has the refusal: %q %s", u.ErrType, body)
+			}
+			if code, msg, body, _ := askThirdParty(t, h, piSystem(t, "/Users/raven/other"), stream); code != 200 || !strings.Contains(body, "ok") {
+				t.Fatalf("%d %.300s %.300s", code, msg, body)
+			}
+			if n := helperStarts(started); n != 1 {
+				t.Fatalf("the interactive mode started %d times, want once: the prompt it refused runs as -p", n)
+			}
+			if runs := len(h.runs()); runs != 3 {
+				t.Fatalf("%d runs, want 3", runs)
+			}
+		})
 	}
 }
